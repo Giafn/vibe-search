@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from 'uuid'
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { words, masterId, boxes: boxConfigs } = body
+    const { words, masterId, boxes: boxConfigs, timer } = body
 
     if (!words || !Array.isArray(words) || words.length === 0) {
       return NextResponse.json({ error: 'Words array is required' }, { status: 400 })
@@ -30,12 +30,13 @@ export async function POST(req: NextRequest) {
     const roomId = uuidv4()
     const masterUuid = masterId || uuidv4()
 
-    // Create room
+    // Create room with global timer
     const { error: roomError } = await db.from('rooms').insert({
       id: roomId,
       code,
       master_id: masterUuid,
       status: 'WAITING',
+      timer: timer || 120,
     })
 
     if (roomError) {
@@ -44,17 +45,16 @@ export async function POST(req: NextRequest) {
     }
 
     // Generate boxes
-    // boxConfigs is optional: [{ words: [...], timer: 120 }]
+    // boxConfigs is optional: [{ words: [...] }]
     // If not provided, use single box with all words
     const boxList = boxConfigs && boxConfigs.length > 0
       ? boxConfigs
-      : [{ words, timer: 120 }]
+      : [{ words }]
 
     const boxInserts = []
     for (let i = 0; i < boxList.length; i++) {
       const boxConfig = boxList[i]
       const boxWords = boxConfig.words || words
-      const timer = boxConfig.timer || 120
 
       const { grid, metadata } = generateGrid(boxWords)
 
@@ -63,7 +63,6 @@ export async function POST(req: NextRequest) {
         room_id: roomId,
         grid,
         metadata,
-        timer,
         order_index: i,
       })
     }
@@ -82,6 +81,7 @@ export async function POST(req: NextRequest) {
         code,
         masterId: masterUuid,
         status: 'WAITING',
+        timer: timer || 120,
       },
       boxCount: boxInserts.length,
     })

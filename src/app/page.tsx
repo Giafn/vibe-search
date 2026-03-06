@@ -4,26 +4,76 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { v4 as uuidv4 } from 'uuid'
 
+interface BoxConfig {
+  words: string
+}
+
 export default function HomePage() {
   const router = useRouter()
   const [mode, setMode] = useState<'home' | 'create' | 'join'>('home')
-  const [wordInput, setWordInput] = useState('')
-  const [timer, setTimer] = useState(120)
+  const [boxes, setBoxes] = useState<BoxConfig[]>([{ words: '' }])
+  const [timerMinutes, setTimerMinutes] = useState(2)  // Global timer in minutes
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [playerName, setPlayerName] = useState('')
 
-  const words = wordInput
-    .split(/[\n,]+/)
-    .map(w => w.trim().toUpperCase())
-    .filter(w => w.length > 0)
+  function addBox() {
+    setBoxes([...boxes, { words: '' }])
+  }
+
+  function removeBox(index: number) {
+    if (boxes.length > 1) {
+      setBoxes(boxes.filter((_, i) => i !== index))
+    }
+  }
+
+  function updateBoxWords(index: number, value: string) {
+    const newBoxes = [...boxes]
+    newBoxes[index].words = value
+    setBoxes(newBoxes)
+  }
+
+  function getBoxWords(index: number) {
+    if (!boxes[index].words) return []
+    return boxes[index].words
+      .split(/[\n,]+/)
+      .map(w => w.trim().toUpperCase())
+      .filter(w => w.length > 0 && /^[A-Z]+$/.test(w))
+  }
+
+  function getTotalWords() {
+    return boxes.reduce((total, box) => {
+      if (!box.words) return total
+      const words = box.words.split(/[\n,]+/).map(w => w.trim().toUpperCase()).filter(w => w.length > 0)
+      return total + words.length
+    }, 0)
+  }
 
   async function handleCreate() {
-    if (words.length < 3) {
-      setError('Minimal 3 kata diperlukan')
+    const totalWords = getTotalWords()
+    console.log('Total words:', totalWords)
+    console.log('Boxes:', boxes)
+
+    if (totalWords < 3) {
+      setError('Minimal 3 kata diperlukan secara total')
       return
     }
+
+    const processedBoxes = boxes.map(box => ({
+      words: box.words
+        .split(/[\n,]+/)
+        .map(w => w.trim().toUpperCase())
+        .filter(w => w.length > 0),
+    })).filter(b => b.words.length > 0)
+
+    console.log('Processed boxes:', processedBoxes)
+
+    if (processedBoxes.length === 0) {
+      setError('Masukkan minimal satu box dengan kata')
+      return
+    }
+
     setLoading(true)
     setError('')
 
@@ -36,7 +86,7 @@ export default function HomePage() {
       const res = await fetch('/api/room/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ words, masterId, boxes: [{ words, timer }] }),
+        body: JSON.stringify({ words: processedBoxes[0].words, masterId, boxes: processedBoxes, timer: timerMinutes * 60 }),
       })
       const data = await res.json()
       if (data.success) {
@@ -133,37 +183,77 @@ export default function HomePage() {
                 style={{ fontFamily: 'Orbitron, sans-serif', color: '#00E5FF' }}>
                 BUAT ROOM BARU
               </h2>
-              
-              <div className="mb-4">
-                <label className="text-xs text-blue-300 uppercase tracking-widest mb-2 block">
-                  Daftar Kata (pisahkan dengan enter atau koma)
-                </label>
-                <textarea
-                  value={wordInput}
-                  onChange={e => setWordInput(e.target.value)}
-                  rows={6}
-                  placeholder="JAVASCRIPT&#10;REACT&#10;NEXTJS&#10;TYPESCRIPT"
-                  className="w-full rounded-xl p-3 text-sm font-mono resize-none focus:outline-none transition-all"
-                  style={{
-                    background: 'rgba(10,14,26,0.8)',
-                    border: '1px solid rgba(61,126,255,0.3)',
-                    color: '#00E5FF',
-                    caretColor: '#00E5FF',
-                  }}
-                />
-                <p className="text-xs text-blue-400 mt-1">{words.length} kata</p>
+
+              <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 mb-4">
+                {boxes.map((box, index) => (
+                  <div key={index} className="rounded-xl p-4 relative"
+                    style={{
+                      background: 'rgba(10,14,26,0.6)',
+                      border: '1px solid rgba(61,126,255,0.2)',
+                    }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-bold text-blue-300">
+                        Grid {index + 1}
+                      </h3>
+                      {boxes.length > 1 && (
+                        <button
+                          onClick={() => removeBox(index)}
+                          className="text-xs px-2 py-1 rounded-lg text-red-400 hover:text-red-300 transition-colors"
+                          style={{ background: 'rgba(255,71,87,0.15)' }}>
+                          ✕ Hapus
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="mb-3">
+                      <textarea
+                        value={box.words}
+                        onChange={e => updateBoxWords(index, e.target.value)}
+                        rows={3}
+                        placeholder="JAVASCRIPT&#10;REACT&#10;NEXTJS"
+                        className="w-full rounded-lg p-2 text-xs font-mono resize-none focus:outline-none transition-all"
+                        style={{
+                          background: 'rgba(10,14,26,0.8)',
+                          border: '1px solid rgba(61,126,255,0.3)',
+                          color: '#00E5FF',
+                          caretColor: '#00E5FF',
+                        }}
+                      />
+                      <p className="text-xs text-blue-400 mt-1">{getBoxWords(index).length} kata</p>
+                    </div>
+                  </div>
+                ))}
               </div>
 
+              {/* Global Timer */}
               <div className="mb-5">
-                <label className="text-xs text-blue-300 uppercase tracking-widest mb-2 block">
-                  Timer (detik): {timer}s
+                <label className="text-xs text-blue-300 uppercase tracking-widest mb-3 block">
+                  ⏱️ Timer Permainan (menit): {timerMinutes} menit
                 </label>
                 <input
-                  type="range" min={30} max={300} step={30}
-                  value={timer}
-                  onChange={e => setTimer(Number(e.target.value))}
+                  type="range" min={1} max={60} step={1}
+                  value={timerMinutes}
+                  onChange={e => setTimerMinutes(Number(e.target.value))}
                   className="w-full accent-blue-500"
                 />
+              </div>
+
+              <button
+                onClick={addBox}
+                className="w-full py-3 rounded-xl text-sm font-bold mb-5 transition-all hover:scale-105 active:scale-95"
+                style={{
+                  background: 'rgba(61,126,255,0.15)',
+                  border: '1px dashed rgba(61,126,255,0.5)',
+                  color: '#3D7EFF',
+                }}>
+                + Tambah Grid
+              </button>
+
+              <div className="rounded-lg p-3 mb-5 text-center"
+                style={{ background: 'rgba(0,229,255,0.1)' }}>
+                <p className="text-sm font-bold" style={{ color: '#00E5FF' }}>
+                  Total: {getTotalWords()} kata di {boxes.length} grid
+                </p>
               </div>
 
               {error && (

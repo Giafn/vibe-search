@@ -80,14 +80,41 @@ export async function POST(req: NextRequest) {
         console.error('Metadata update error:', updateError)
       }
 
-      // Check if all words found
+      // Check if all words found in current box
       const allFound = updatedMetadata.every((m: WordMetadata) => m.isFound)
       if (allFound) {
-        // Optionally update room status or trigger next box
-        await db
-          .from('rooms')
-          .update({ status: 'FINISHED' })
-          .eq('id', room.id)
+        // Get all boxes for this room to check if there's a next box
+        const { data: allBoxes } = await db
+          .from('boxes')
+          .select('id, order_index')
+          .eq('room_id', room.id)
+          .order('order_index', { ascending: true })
+
+        if (allBoxes && allBoxes.length > 1) {
+          // There are multiple boxes, find the next one
+          const currentBoxIndex = allBoxes.findIndex(b => b.id === boxId)
+          if (currentBoxIndex < allBoxes.length - 1) {
+            // Move to next box (broadcast new box via room status update or emit event)
+            // For now, just notify that box is complete
+            // Client will handle moving to next box
+            await db
+              .from('rooms')
+              .update({ status: 'PLAYING' }) // Keep playing status, client will check next box
+              .eq('id', room.id)
+          } else {
+            // Last box completed, finish the game
+            await db
+              .from('rooms')
+              .update({ status: 'FINISHED' })
+              .eq('id', room.id)
+          }
+        } else {
+          // Only one box, finish the game
+          await db
+            .from('rooms')
+            .update({ status: 'FINISHED' })
+            .eq('id', room.id)
+        }
       }
     }
 

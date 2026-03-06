@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { v4 as uuidv4 } from 'uuid'
 import { supabase, WordMetadata } from '@/lib/supabase'
@@ -20,15 +20,7 @@ interface HistoryItem {
 interface Box {
   id: string
   metadata: WordMetadata[]
-  timer: number
   order_index: number
-}
-
-interface PlayerScore {
-  player_id: string
-  player_name: string
-  total_points: number
-  words_found: number
 }
 
 function getTime() {
@@ -46,27 +38,67 @@ export default function PlayPage() {
   const [nameSet, setNameSet] = useState(!!nameParam)
   const [nameInput, setNameInput] = useState(nameParam)
 
-  const [room, setRoom] = useState<{ id: string; status: string } | null>(null)
+  const [room, setRoom] = useState<{ id: string; status: string; timer: number; game_started_at: string | null } | null>(null)
   const [activeBox, setActiveBox] = useState<Box | null>(null)
+  const [allBoxes, setAllBoxes] = useState<Box[]>([])
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [myScore, setMyScore] = useState(0)
   const [myWords, setMyWords] = useState(0)
   const [loading, setLoading] = useState(false)
   const [gameStatus, setGameStatus] = useState<'WAITING' | 'PLAYING' | 'FINISHED'>('WAITING')
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
-  const [roomLoaded, setRoomLoaded] = useState(false)
 
-  // Init player ID
+  // Init player ID and load saved name & history
   useEffect(() => {
     let id = ''
     try {
       id = localStorage.getItem('vibePlayerId') || uuidv4()
       localStorage.setItem('vibePlayerId', id)
+
+      // Load saved player name for this room
+      const savedName = localStorage.getItem(`vibePlayerName_${code}`)
+      const savedNameSet = localStorage.getItem(`vibeNameSet_${code}`)
+      if (savedName) {
+        setPlayerName(savedName)
+        setNameInput(savedName)
+        // Only auto-set nameSet if game hasn't finished
+        const nameSet = savedNameSet === 'true'
+        setNameSet(nameSet)
+      }
+
+      // Load saved history for this room
+      const savedHistory = localStorage.getItem(`vibeHistory_${code}`)
+      if (savedHistory) {
+        try {
+          const parsed = JSON.parse(savedHistory) as HistoryItem[]
+          setHistory(parsed)
+
+          // Calculate score from saved history
+          const savedScore = parsed
+            .filter(h => h.isCorrect)
+            .reduce((sum, h) => sum + h.points, 0)
+          setMyScore(savedScore)
+          setMyWords(parsed.filter(h => h.isCorrect).length)
+        } catch {
+          // Invalid JSON, ignore
+        }
+      }
+
+      // Load saved score
+      const savedScore = localStorage.getItem(`vibeScore_${code}`)
+      if (savedScore) {
+        setMyScore(parseInt(savedScore, 10) || 0)
+      }
+
+      const savedWords = localStorage.getItem(`vibeWords_${code}`)
+      if (savedWords) {
+        setMyWords(parseInt(savedWords, 10) || 0)
+      }
     } catch {
       id = uuidv4()
     }
     setPlayerId(id)
-  }, [])
+  }, [code])
 
   // Load room
   useEffect(() => {
@@ -75,7 +107,7 @@ export default function PlayPage() {
     async function load() {
       const { data: roomData } = await supabase
         .from('rooms')
-        .select('id, status')
+        .select('id, status, timer, game_started_at')
         .eq('code', code)
         .single()
 
@@ -85,16 +117,23 @@ export default function PlayPage() {
 
       const { data: boxes } = await supabase
         .from('boxes')
-        .select('id, metadata, timer, order_index')
+        .select('id, metadata, order_index')
         .eq('room_id', roomData.id)
         .order('order_index')
 
       if (boxes && boxes.length > 0) {
+        setAllBoxes(boxes)
         setActiveBox(boxes[0])
-        setTimeLeft(boxes[0].timer)
-      }
 
-      setRoomLoaded(true)
+        // Calculate time left based on game_started_at for new players
+        if (roomData.status === 'PLAYING' && roomData.game_started_at) {
+          const startedAt = new Date(roomData.game_started_at).getTime()
+          const now = Date.now()
+          const elapsedSeconds = Math.floor((now - startedAt) / 1000)
+          const remaining = Math.max(0, roomData.timer - elapsedSeconds)
+          setTimeLeft(remaining)
+        }
+      }
     }
     load()
   }, [code, playerId])
@@ -111,7 +150,26 @@ export default function PlayPage() {
         table: 'rooms',
         filter: `id=eq.${room.id}`,
       }, payload => {
-        setGameStatus(payload.new.status)
+        const newStatus = payload.new.status
+        setGameStatus(newStatus)
+
+        // Set timer when game starts
+        if (newStatus === 'PLAYING' && payload.new.game_started_at && !payload.old.game_started_at) {
+          setTimeLeft(room?.timer || 120)
+        }
+
+        // Clear localStorage and stop timer when game is finished
+        if (newStatus === 'FINISHED') {
+          setTimeLeft(0)
+          try {
+            localStorage.removeItem(`vibeHistory_${code}`)
+            localStorage.removeItem(`vibeScore_${code}`)
+            localStorage.removeItem(`vibeWords_${code}`)
+            localStorage.removeItem(`vibeNameSet_${code}`)
+          } catch {
+            // localStorage not available
+          }
+        }
       })
       .subscribe()
 
@@ -123,6 +181,8 @@ export default function PlayPage() {
         table: 'boxes',
         filter: `room_id=eq.${room.id}`,
       }, payload => {
+        // Update the specific box in allBoxes and activeBox if it's the active one
+        setAllBoxes(prev => prev.map(b => b.id === payload.new.id ? { ...b, ...payload.new } : b))
         setActiveBox(prev => {
           if (prev && prev.id === payload.new.id) {
             return { ...prev, ...payload.new }
@@ -143,9 +203,42 @@ export default function PlayPage() {
     if (gameStatus !== 'PLAYING' || timeLeft === null) return
     if (timeLeft <= 0) return
 
-    const t = setTimeout(() => setTimeLeft(prev => (prev ?? 0) - 1), 1000)
-    return () => clearTimeout(t)
+    const interval = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev === null || prev <= 0) {
+          clearInterval(interval)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(interval)
   }, [gameStatus, timeLeft])
+
+  // Auto move to next box when current box is complete
+  useEffect(() => {
+    if (!activeBox || !allBoxes.length || gameStatus !== 'PLAYING') return
+
+    const foundCount = activeBox.metadata?.filter((m: WordMetadata) => m.isFound).length || 0
+    const totalCount = activeBox.metadata?.length || 0
+
+    // Check if current box is complete
+    if (foundCount === totalCount && totalCount > 0) {
+      const currentIndex = allBoxes.findIndex(b => b.id === activeBox.id)
+
+      // Move to next box if available
+      if (currentIndex < allBoxes.length - 1) {
+        const nextBox = allBoxes[currentIndex + 1]
+        setActiveBox(nextBox)
+
+        // Show notification for box completion
+        if (typeof window !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate([200, 100, 200])
+        }
+      }
+    }
+  }, [activeBox, allBoxes, gameStatus])
 
   async function handleSubmit(word: string) {
     if (!room || !activeBox || !playerId || !playerName) return
@@ -175,11 +268,36 @@ export default function PlayPage() {
         time: getTime(),
       }
 
-      setHistory(prev => [...prev, item])
+      setHistory(prev => {
+        const newHistory = [...prev, item]
+        // Save to localStorage
+        try {
+          localStorage.setItem(`vibeHistory_${code}`, JSON.stringify(newHistory))
+        } catch {
+          // localStorage not available
+        }
+        return newHistory
+      })
 
       if (data.isValid) {
-        setMyScore(prev => prev + (data.points || 0))
-        setMyWords(prev => prev + 1)
+        setMyScore(prev => {
+          const newScore = prev + (data.points || 0)
+          try {
+            localStorage.setItem(`vibeScore_${code}`, newScore.toString())
+          } catch {
+            // localStorage not available
+          }
+          return newScore
+        })
+        setMyWords(prev => {
+          const newWords = prev + 1
+          try {
+            localStorage.setItem(`vibeWords_${code}`, newWords.toString())
+          } catch {
+            // localStorage not available
+          }
+          return newWords
+        })
         // Vibrate on correct answer
         if (typeof window !== 'undefined' && navigator.vibrate) {
           navigator.vibrate([100, 50, 100])
@@ -196,9 +314,14 @@ export default function PlayPage() {
     setLoading(false)
   }
 
-  const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-  const foundCount = activeBox?.metadata?.filter((m: WordMetadata) => m.isFound).length || 0
-  const totalCount = activeBox?.metadata?.length || 0
+  const formatTime = (s: number) => {
+    const minutes = Math.floor(s / 60)
+    const seconds = s % 60
+    if (minutes >= 1) {
+      return `${minutes}:${String(seconds).padStart(2, '0')}`
+    }
+    return `${seconds}s`
+  }
 
   // Name input screen
   if (!nameSet) {
@@ -241,8 +364,15 @@ export default function PlayPage() {
             <button
               onClick={() => {
                 if (nameInput.trim()) {
-                  setPlayerName(nameInput.trim())
+                  const name = nameInput.trim()
+                  setPlayerName(name)
                   setNameSet(true)
+                  try {
+                    localStorage.setItem(`vibePlayerName_${code}`, name)
+                    localStorage.setItem(`vibeNameSet_${code}`, 'true')
+                  } catch {
+                    // localStorage not available
+                  }
                 }
               }}
               disabled={!nameInput.trim()}
@@ -261,7 +391,7 @@ export default function PlayPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col p-4 max-w-lg mx-auto">
+    <div className="h-screen flex flex-col p-4 max-w-lg mx-auto overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -327,39 +457,6 @@ export default function PlayPage() {
         </div>
       )}
 
-      {/* Word list hints */}
-      {activeBox && gameStatus === 'PLAYING' && (
-        <div className="mb-4 rounded-2xl p-4"
-          style={{
-            background: 'rgba(26,39,68,0.4)',
-            border: '1px solid rgba(61,126,255,0.15)',
-          }}>
-          <p className="text-xs text-blue-400 uppercase tracking-widest mb-2">
-            Kata yang dicari ({foundCount}/{totalCount})
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {activeBox.metadata.map((m: WordMetadata) => (
-              <span key={m.word}
-                className="px-2 py-1 rounded-lg text-xs font-bold"
-                style={{
-                  fontFamily: 'Orbitron, sans-serif',
-                  background: m.isFound ? 'rgba(0,255,157,0.1)' : 'rgba(61,126,255,0.08)',
-                  border: `1px solid ${m.isFound ? 'rgba(0,255,157,0.3)' : 'rgba(61,126,255,0.15)'}`,
-                  color: m.isFound ? '#00FF9D' : 'rgba(255,255,255,0.5)',
-                  textDecoration: m.isFound ? 'line-through' : 'none',
-                }}>
-                {m.word}
-                {m.isFound && m.foundByName && (
-                  <span className="ml-1 opacity-60 text-[10px]">
-                    ({m.foundByName === playerName ? 'Kamu!' : m.foundByName})
-                  </span>
-                )}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Input area */}
       {gameStatus === 'PLAYING' && (
         <div className="mb-4">
@@ -372,7 +469,7 @@ export default function PlayPage() {
       )}
 
       {/* History */}
-      <div className="flex-1 rounded-2xl p-4"
+      <div className="flex-1 min-h-0 rounded-2xl p-4 overflow-auto"
         style={{
           background: 'rgba(26,39,68,0.3)',
           border: '1px solid rgba(61,126,255,0.1)',
@@ -380,9 +477,6 @@ export default function PlayPage() {
         <p className="text-xs text-blue-400 uppercase tracking-widest mb-3">Riwayat Tebakan</p>
         <HistoryList history={history} />
       </div>
-
-      {/* Bottom padding for mobile */}
-      <div className="h-6" />
     </div>
   )
 }

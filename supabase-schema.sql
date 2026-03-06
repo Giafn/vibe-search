@@ -3,31 +3,45 @@
 -- Run this in Supabase SQL Editor
 -- =========================================
 
+-- =========================================
+-- DROP EXISTING TABLES (FRESH START)
+-- =========================================
+DROP TABLE IF EXISTS submissions CASCADE;
+DROP TABLE IF EXISTS boxes CASCADE;
+DROP TABLE IF EXISTS rooms CASCADE;
+
 -- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- =========================================
 -- Rooms table
-CREATE TABLE IF NOT EXISTS rooms (
+-- =========================================
+CREATE TABLE rooms (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(5) UNIQUE NOT NULL,
     master_id UUID NOT NULL,
     status VARCHAR(20) DEFAULT 'WAITING' CHECK (status IN ('WAITING', 'PLAYING', 'FINISHED')),
+    timer INT DEFAULT 120,               -- Global timer for the entire session
+    game_started_at TIMESTAMP WITH TIME ZONE, -- When the game started (for timer sync)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- =========================================
 -- Boxes table (each room can have multiple grids)
-CREATE TABLE IF NOT EXISTS boxes (
+-- =========================================
+CREATE TABLE boxes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     room_id UUID REFERENCES rooms(id) ON DELETE CASCADE,
     grid JSONB NOT NULL,           -- 2D Array [['A','B'], ['C','D']]
     metadata JSONB NOT NULL,       -- [{word, coords, isFound, foundBy, foundByName, points}]
-    timer INT DEFAULT 120,
     order_index INT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- =========================================
 -- Submissions table
-CREATE TABLE IF NOT EXISTS submissions (
+-- =========================================
+CREATE TABLE submissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     player_id UUID NOT NULL,
     player_name TEXT NOT NULL,
@@ -38,11 +52,13 @@ CREATE TABLE IF NOT EXISTS submissions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- =========================================
 -- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_rooms_code ON rooms(code);
-CREATE INDEX IF NOT EXISTS idx_boxes_room_id ON boxes(room_id);
-CREATE INDEX IF NOT EXISTS idx_submissions_room_id ON submissions(room_id);
-CREATE INDEX IF NOT EXISTS idx_submissions_player_id ON submissions(player_id);
+-- =========================================
+CREATE INDEX idx_rooms_code ON rooms(code);
+CREATE INDEX idx_boxes_room_id ON boxes(room_id);
+CREATE INDEX idx_submissions_room_id ON submissions(room_id);
+CREATE INDEX idx_submissions_player_id ON submissions(player_id);
 
 -- =========================================
 -- Row Level Security (RLS) Policies

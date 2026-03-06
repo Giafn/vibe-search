@@ -6,12 +6,12 @@ import { supabase, WordMetadata } from '@/lib/supabase'
 import GridBoard from '@/components/master/GridBoard'
 import Leaderboard from '@/components/master/Leaderboard'
 import { calculateLeaderboard } from '@/lib/scoring'
+import WordListModal from '@/components/master/WordListModal'
 
 interface Box {
   id: string
   grid: string[][]
   metadata: WordMetadata[]
-  timer: number
   order_index: number
 }
 
@@ -33,7 +33,7 @@ export default function MasterRoomPage() {
   const params = useParams()
   const code = params?.code as string
 
-  const [room, setRoom] = useState<{ id: string; status: string } | null>(null)
+  const [room, setRoom] = useState<{ id: string; status: string; timer: number; game_started_at: string | null } | null>(null)
   const [boxes, setBoxes] = useState<Box[]>([])
   const [activeBoxIndex, setActiveBoxIndex] = useState(0)
   const [submissions, setSubmissions] = useState<Submission[]>([])
@@ -41,6 +41,7 @@ export default function MasterRoomPage() {
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [gameStatus, setGameStatus] = useState<'WAITING' | 'PLAYING' | 'FINISHED'>('WAITING')
   const [recentFind, setRecentFind] = useState<{ word: string; name: string } | null>(null)
+  const [showWordList, setShowWordList] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const activeBox = boxes[activeBoxIndex]
@@ -50,7 +51,7 @@ export default function MasterRoomPage() {
     async function loadRoom() {
       const { data: roomData } = await supabase
         .from('rooms')
-        .select('id, status')
+        .select('id, status, timer, game_started_at')
         .eq('code', code)
         .single()
 
@@ -60,7 +61,7 @@ export default function MasterRoomPage() {
 
       const { data: boxData } = await supabase
         .from('boxes')
-        .select('*')
+        .select('id, grid, metadata, order_index')
         .eq('room_id', roomData.id)
         .order('order_index')
 
@@ -74,6 +75,15 @@ export default function MasterRoomPage() {
       if (subData) {
         setSubmissions(subData)
         setLeaderboard(calculateLeaderboard(subData))
+      }
+
+      // Calculate time left based on game_started_at
+      if (roomData.status === 'PLAYING' && roomData.game_started_at) {
+        const startedAt = new Date(roomData.game_started_at).getTime()
+        const now = Date.now()
+        const elapsedSeconds = Math.floor((now - startedAt) / 1000)
+        const remaining = Math.max(0, roomData.timer - elapsedSeconds)
+        setTimeLeft(remaining)
       }
 
       setLoading(false)
@@ -95,16 +105,38 @@ export default function MasterRoomPage() {
         filter: `room_id=eq.${room.id}`,
       }, payload => {
         const updated = payload.new as Box
-        setBoxes(prev => prev.map(b => b.id === updated.id ? { ...b, ...updated } : b))
+        const oldData = payload.old as Box | undefined
 
-        // Detect new find
-        const newlyFound = (updated.metadata as WordMetadata[]).find(
-          (m: WordMetadata) => m.isFound && m.foundByName
-        )
-        if (newlyFound) {
-          setRecentFind({ word: newlyFound.word, name: newlyFound.foundByName! })
-          setTimeout(() => setRecentFind(null), 3000)
-        }
+        setBoxes(prev => {
+          const newBoxes = prev.map(b => b.id === updated.id ? { ...b, ...updated } : b)
+
+          // Check if box is complete and auto-advance
+          const metadata = updated.metadata as WordMetadata[]
+          const allFound = metadata.every((m: WordMetadata) => m.isFound)
+          const currentIndex = prev.findIndex(b => b.id === updated.id)
+
+          if (allFound && currentIndex !== -1 && currentIndex < prev.length - 1) {
+            // Move to next box
+            setActiveBoxIndex(currentIndex + 1)
+            setTimeLeft(newBoxes[currentIndex + 1]?.timer || 120)
+          }
+
+          // Detect new find by comparing old and new metadata
+          const oldMetadata = oldData?.metadata as WordMetadata[] || []
+
+          const newlyFound = metadata.find((newWord: WordMetadata) => {
+            const oldWord = oldMetadata?.find((old: WordMetadata) => old.word === newWord.word)
+            // Word is newly found if: it's found now AND it wasn't found before OR the finder changed
+            return newWord.isFound && (!oldWord?.isFound || oldWord.foundByName !== newWord.foundByName)
+          })
+
+          if (newlyFound && newlyFound.foundByName) {
+            setRecentFind({ word: newlyFound.word, name: newlyFound.foundByName })
+            setTimeout(() => setRecentFind(null), 3000)
+          }
+
+          return newBoxes
+        })
       })
       .subscribe()
 
@@ -136,6 +168,15 @@ export default function MasterRoomPage() {
         filter: `id=eq.${room.id}`,
       }, payload => {
         setGameStatus(payload.new.status)
+        // If game started and game_started_at is set, calculate time left
+        if (payload.new.status === 'PLAYING' && payload.new.game_started_at && !payload.old.game_started_at) {
+          const startedAt = new Date(payload.new.game_started_at).getTime()
+          setTimeLeft(room?.timer || 120)
+        }
+        // If game finished, clear timer
+        if (payload.new.status === 'FINISHED') {
+          setTimeLeft(0)
+        }
       })
       .subscribe()
 
@@ -148,13 +189,17 @@ export default function MasterRoomPage() {
 
   // Timer
   useEffect(() => {
-    if (gameStatus !== 'PLAYING' || !activeBox) return
-    setTimeLeft(activeBox.timer)
+    if (gameStatus !== 'PLAYING' || timeLeft === null) return
+    if (timeLeft <= 0) return
 
     const interval = setInterval(() => {
       setTimeLeft(prev => {
         if (prev === null || prev <= 0) {
           clearInterval(interval)
+          // Auto finish game when timer reaches 0
+          if (room) {
+            supabase.from('rooms').update({ status: 'FINISHED' }).eq('id', room.id)
+          }
           return 0
         }
         return prev - 1
@@ -162,11 +207,16 @@ export default function MasterRoomPage() {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [gameStatus, activeBoxIndex, activeBox])
+  }, [gameStatus, timeLeft, room])
 
   async function startGame() {
     if (!room) return
-    await supabase.from('rooms').update({ status: 'PLAYING' }).eq('id', room.id)
+    const now = new Date().toISOString()
+    await supabase.from('rooms').update({
+      status: 'PLAYING',
+      game_started_at: now,
+    }).eq('id', room.id)
+    setTimeLeft(room.timer)
     setGameStatus('PLAYING')
   }
 
@@ -181,7 +231,14 @@ export default function MasterRoomPage() {
   const totalCount = activeBox?.metadata?.length || 0
   const progress = totalCount > 0 ? (foundCount / totalCount) * 100 : 0
 
-  const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  const formatTime = (s: number) => {
+    const minutes = Math.floor(s / 60)
+    const seconds = s % 60
+    if (minutes >= 1) {
+      return `${minutes}:${String(seconds).padStart(2, '0')}`
+    }
+    return `${seconds}s`
+  }
 
   if (loading) {
     return (
@@ -220,9 +277,18 @@ export default function MasterRoomPage() {
                 {gameStatus === 'PLAYING' ? '● LIVE' : gameStatus === 'FINISHED' ? '■ SELESAI' : '○ MENUNGGU'}
               </span>
             </div>
-            <p className="text-xs text-blue-400 mt-1 opacity-60">
-              Box {activeBoxIndex + 1}/{boxes.length} · {foundCount}/{totalCount} kata ditemukan
-            </p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowWordList(true)}
+                className="text-sm font-bold px-3 py-1.5 rounded-lg transition-all hover:scale-105"
+                style={{
+                  background: 'rgba(61,126,255,0.15)',
+                  border: '1px solid rgba(61,126,255,0.3)',
+                  color: '#00E5FF',
+                }}>
+                📋 {foundCount}/{totalCount} Kata
+              </button>
+            </div>
           </div>
 
           {/* Timer */}
@@ -298,31 +364,11 @@ export default function MasterRoomPage() {
               <GridBoard
                 grid={activeBox.grid}
                 metadata={activeBox.metadata}
-                cellSize={Math.min(44, Math.floor((window.innerWidth - 380) / (activeBox.grid[0]?.length || 10)))}
+                cellSize={Math.min(52, Math.floor((window.innerWidth - 380) / (activeBox.grid[0]?.length || 10)))}
               />
             </div>
           )}
         </div>
-
-        {/* Word list */}
-        {activeBox && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {activeBox.metadata.map((m: WordMetadata) => (
-              <span key={m.word}
-                className="px-3 py-1 rounded-lg text-sm font-bold transition-all"
-                style={{
-                  fontFamily: 'Orbitron, sans-serif',
-                  fontSize: '11px',
-                  background: m.isFound ? 'rgba(0,255,157,0.1)' : 'rgba(61,126,255,0.08)',
-                  border: `1px solid ${m.isFound ? 'rgba(0,255,157,0.4)' : 'rgba(61,126,255,0.2)'}`,
-                  color: m.isFound ? '#00FF9D' : 'rgba(255,255,255,0.5)',
-                  textDecoration: m.isFound ? 'line-through' : 'none',
-                }}>
-                {m.word} ({m.points}pts)
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Sidebar Leaderboard */}
@@ -356,6 +402,16 @@ export default function MasterRoomPage() {
           </div>
         </div>
       </div>
+
+      {/* Word List Modal */}
+      {showWordList && activeBox && (
+        <WordListModal
+          box={activeBox}
+          boxIndex={activeBoxIndex}
+          totalBoxes={boxes.length}
+          onClose={() => setShowWordList(false)}
+        />
+      )}
     </div>
   )
 }
