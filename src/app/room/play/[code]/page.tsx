@@ -35,8 +35,9 @@ export default function PlayPage() {
 
   const [playerId, setPlayerId] = useState('')
   const [playerName, setPlayerName] = useState(nameParam)
-  const [nameSet, setNameSet] = useState(!!nameParam)
+  const [nameSet, setNameSet] = useState(false)
   const [nameInput, setNameInput] = useState(nameParam)
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true)
 
   const [room, setRoom] = useState<{ id: string; status: string; timer: number; game_started_at: string | null } | null>(null)
   const [activeBox, setActiveBox] = useState<Box | null>(null)
@@ -56,49 +57,55 @@ export default function PlayPage() {
       localStorage.setItem('vibePlayerId', id)
 
       // Load saved player name for this room
-      const savedName = localStorage.getItem(`vibePlayerName_${code}`)
-      const savedNameSet = localStorage.getItem(`vibeNameSet_${code}`)
-      if (savedName) {
-        setPlayerName(savedName)
-        setNameInput(savedName)
-        // Only auto-set nameSet if game hasn't finished
-        const nameSet = savedNameSet === 'true'
-        setNameSet(nameSet)
-      }
-
-      // Load saved history for this room
-      const savedHistory = localStorage.getItem(`vibeHistory_${code}`)
-      if (savedHistory) {
-        try {
-          const parsed = JSON.parse(savedHistory) as HistoryItem[]
-          setHistory(parsed)
-
-          // Calculate score from saved history
-          const savedScore = parsed
-            .filter(h => h.isCorrect)
-            .reduce((sum, h) => sum + h.points, 0)
-          setMyScore(savedScore)
-          setMyWords(parsed.filter(h => h.isCorrect).length)
-        } catch {
-          // Invalid JSON, ignore
+      if (code) {
+        const savedName = localStorage.getItem(`vibePlayerName_${code}`)
+        const savedNameSet = localStorage.getItem(`vibeNameSet_${code}`)
+        if (savedName && savedNameSet === 'true') {
+          setPlayerName(savedName)
+          setNameInput(savedName)
+          setNameSet(true)
+        } else if (nameParam) {
+          // Fallback to URL parameter if no saved name
+          setPlayerName(nameParam)
+          setNameInput(nameParam)
+          setNameSet(true)
         }
-      }
 
-      // Load saved score
-      const savedScore = localStorage.getItem(`vibeScore_${code}`)
-      if (savedScore) {
-        setMyScore(parseInt(savedScore, 10) || 0)
-      }
+        // Load saved history for this room
+        const savedHistory = localStorage.getItem(`vibeHistory_${code}`)
+        if (savedHistory) {
+          try {
+            const parsed = JSON.parse(savedHistory) as HistoryItem[]
+            setHistory(parsed)
 
-      const savedWords = localStorage.getItem(`vibeWords_${code}`)
-      if (savedWords) {
-        setMyWords(parseInt(savedWords, 10) || 0)
+            // Calculate score from saved history
+            const savedScore = parsed
+              .filter(h => h.isCorrect)
+              .reduce((sum, h) => sum + h.points, 0)
+            setMyScore(savedScore)
+            setMyWords(parsed.filter(h => h.isCorrect).length)
+          } catch {
+            // Invalid JSON, ignore
+          }
+        }
+
+        // Load saved score
+        const savedScore = localStorage.getItem(`vibeScore_${code}`)
+        if (savedScore) {
+          setMyScore(parseInt(savedScore, 10) || 0)
+        }
+
+        const savedWords = localStorage.getItem(`vibeWords_${code}`)
+        if (savedWords) {
+          setMyWords(parseInt(savedWords, 10) || 0)
+        }
       }
     } catch {
       id = uuidv4()
     }
     setPlayerId(id)
-  }, [code])
+    setIsCheckingAuth(false)
+  }, [code, nameParam])
 
   // Load room
   useEffect(() => {
@@ -324,6 +331,17 @@ export default function PlayPage() {
   }
 
   // Name input screen
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 rounded-full border-4 border-blue-500 border-t-transparent animate-spin mx-auto mb-4" />
+          <p style={{ fontFamily: 'Orbitron, sans-serif', color: '#00E5FF' }}>Memuat data...</p>
+        </div>
+      </div>
+    )
+  }
+
   if (!nameSet) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6">
@@ -362,7 +380,7 @@ export default function PlayPage() {
               }}
             />
             <button
-              onClick={() => {
+              onClick={async () => {
                 if (nameInput.trim()) {
                   const name = nameInput.trim()
                   setPlayerName(name)
@@ -370,6 +388,17 @@ export default function PlayPage() {
                   try {
                     localStorage.setItem(`vibePlayerName_${code}`, name)
                     localStorage.setItem(`vibeNameSet_${code}`, 'true')
+
+                    // Register player to room
+                    await fetch('/api/room/join', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        playerId,
+                        playerName: name,
+                        roomCode: code,
+                      }),
+                    })
                   } catch {
                     // localStorage not available
                   }
@@ -469,11 +498,7 @@ export default function PlayPage() {
       )}
 
       {/* History */}
-      <div className="flex-1 min-h-0 rounded-2xl p-4 overflow-auto"
-        style={{
-          background: 'rgba(26,39,68,0.3)',
-          border: '1px solid rgba(61,126,255,0.1)',
-        }}>
+      <div className="flex-1 min-h-0 overflow-auto">
         <p className="text-xs text-blue-400 uppercase tracking-widest mb-3">Riwayat Tebakan</p>
         <HistoryList history={history} />
       </div>

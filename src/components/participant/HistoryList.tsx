@@ -25,7 +25,7 @@ export default function HistoryList({ history }: HistoryListProps) {
   }
 
   return (
-    <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
+    <div className="flex flex-col gap-2">
       {[...history].reverse().map(item => {
         let statusIcon = '❌'
         let statusColor = '#FF4757'

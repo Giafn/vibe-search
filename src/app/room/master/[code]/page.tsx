@@ -7,12 +7,14 @@ import GridBoard from '@/components/master/GridBoard'
 import Leaderboard from '@/components/master/Leaderboard'
 import { calculateLeaderboard } from '@/lib/scoring'
 import WordListModal from '@/components/master/WordListModal'
+import QRCodeModal from '@/components/master/QRCodeModal'
 
 interface Box {
   id: string
   grid: string[][]
   metadata: WordMetadata[]
   order_index: number
+  timer?: number
 }
 
 interface PlayerScore {
@@ -42,6 +44,7 @@ export default function MasterRoomPage() {
   const [gameStatus, setGameStatus] = useState<'WAITING' | 'PLAYING' | 'FINISHED'>('WAITING')
   const [recentFind, setRecentFind] = useState<{ word: string; name: string } | null>(null)
   const [showWordList, setShowWordList] = useState(false)
+  const [showQRCode, setShowQRCode] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const activeBox = boxes[activeBoxIndex]
@@ -259,15 +262,20 @@ export default function MasterRoomPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <div className="flex items-center gap-3">
-              <span className="text-2xl font-black tracking-widest px-4 py-2 rounded-xl"
+              <button
+                onClick={() => setShowQRCode(true)}
+                className="flex items-center gap-2 text-2xl font-black tracking-widest px-4 py-2 rounded-xl transition-all hover:scale-105"
                 style={{
                   fontFamily: 'Orbitron, sans-serif',
-                  background: 'linear-gradient(135deg, #3D7EFF22, #00E5FF22)',
-                  border: '1px solid rgba(61,126,255,0.3)',
+                  background: 'linear-gradient(135deg, rgba(61,126,255,0.3), rgba(0,229,255,0.3))',
+                  border: '1px solid rgba(61,126,255,0.4)',
                   color: '#00E5FF',
                 }}>
                 {code}
-              </span>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                </svg>
+              </button>
               <span className="text-sm px-3 py-1 rounded-full font-bold"
                 style={{
                   background: gameStatus === 'PLAYING' ? 'rgba(0,255,157,0.15)' : gameStatus === 'FINISHED' ? 'rgba(255,71,87,0.15)' : 'rgba(255,179,0,0.15)',
@@ -343,20 +351,6 @@ export default function MasterRoomPage() {
             }} />
         </div>
 
-        {/* Recent find banner */}
-        {recentFind && (
-          <div className="mb-4 py-3 px-6 rounded-2xl text-center animate-[popIn_0.4s_ease]"
-            style={{
-              background: 'rgba(255,215,0,0.15)',
-              border: '1px solid rgba(255,215,0,0.4)',
-              boxShadow: '0 0 30px rgba(255,215,0,0.2)',
-            }}>
-            <p className="font-black text-xl" style={{ fontFamily: 'Orbitron, sans-serif', color: '#FFD700' }}>
-              🎉 {recentFind.name} menemukan &quot;{recentFind.word}&quot;!
-            </p>
-          </div>
-        )}
-
         {/* Grid */}
         <div className="flex-1 flex items-center justify-center overflow-auto">
           {activeBox && (
@@ -370,6 +364,23 @@ export default function MasterRoomPage() {
           )}
         </div>
       </div>
+
+      {/* Floating Recent Find Notification */}
+      {recentFind && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50">
+          <div
+            className="py-4 px-8 rounded-2xl"
+            style={{
+              background: 'rgba(255,215,0,0.95)',
+              border: '2px solid rgba(255,215,0,0.6)',
+              boxShadow: '0 0 60px rgba(255,215,0,0.5), 0 20px 60px rgba(0,0,0,0.5)',
+            }}>
+            <p className="font-black text-2xl text-center" style={{ fontFamily: 'Orbitron, sans-serif', color: '#0A0E1A' }}>
+              🎉 {recentFind.name} menemukan &quot;{recentFind.word}&quot;!
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Sidebar Leaderboard */}
       <div className="w-80 flex-shrink-0 border-l p-5 flex flex-col overflow-y-auto"
@@ -410,6 +421,14 @@ export default function MasterRoomPage() {
           boxIndex={activeBoxIndex}
           totalBoxes={boxes.length}
           onClose={() => setShowWordList(false)}
+        />
+      )}
+
+      {/* QR Code Modal */}
+      {showQRCode && (
+        <QRCodeModal
+          code={code}
+          onClose={() => setShowQRCode(false)}
         />
       )}
     </div>

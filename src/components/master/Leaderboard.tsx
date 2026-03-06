@@ -44,7 +44,7 @@ export default function Leaderboard({ scores }: LeaderboardProps) {
     return (
       <div className="text-center py-8 text-blue-400 opacity-50">
         <div className="text-3xl mb-2">🎯</div>
-        <p className="text-sm">Belum ada pemain</p>
+        <p className="text-sm">Belum ada pemain yang join</p>
       </div>
     )
   }
@@ -81,7 +81,9 @@ export default function Leaderboard({ scores }: LeaderboardProps) {
               <p className="font-semibold text-sm truncate" style={{ color: index < 3 ? rankStyle.color : 'white' }}>
                 {score.player_name}
               </p>
-              <p className="text-xs opacity-50">{score.words_found} kata</p>
+              <p className="text-xs opacity-50">
+                {score.words_found > 0 ? `${score.words_found} kata` : 'Belum menemukan kata'}
+              </p>
             </div>
 
             {/* Points */}

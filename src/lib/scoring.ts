@@ -61,6 +61,19 @@ export function calculateLeaderboard(submissions: Array<{
 }>): PlayerScore[] {
   const scoreMap = new Map<string, PlayerScore>()
 
+  // First pass: register all players (even those without correct submissions)
+  for (const sub of submissions) {
+    if (!scoreMap.has(sub.player_id)) {
+      scoreMap.set(sub.player_id, {
+        player_id: sub.player_id,
+        player_name: sub.player_name,
+        total_points: 0,
+        words_found: 0,
+      })
+    }
+  }
+
+  // Second pass: add points for correct submissions
   for (const sub of submissions) {
     if (!sub.is_correct) continue
 
@@ -68,13 +81,6 @@ export function calculateLeaderboard(submissions: Array<{
     if (existing) {
       existing.total_points += sub.points
       existing.words_found += 1
-    } else {
-      scoreMap.set(sub.player_id, {
-        player_id: sub.player_id,
-        player_name: sub.player_name,
-        total_points: sub.points,
-        words_found: 1,
-      })
     }
   }
 
